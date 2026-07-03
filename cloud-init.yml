@@ -1,0 +1,61 @@
+#cloud-config
+# n8n automation environment for Multipass (Ubuntu 24.04 Noble)
+# Repo: me2he5/n8n-env
+# Usage:
+#   multipass launch 24.04 --name n8n-dev --cpus 2 --memory 2G --disk 20G --cloud-init n8n/cloud-init.yml
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - apt-transport-https
+  - ca-certificates
+  - curl
+  - gnupg
+  - lsb-release
+
+runcmd:
+  # --- Docker install ---
+  - install -m 0755 -d /etc/apt/keyrings
+  - curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+  - chmod a+r /etc/apt/keyrings/docker.asc
+  - echo "deb [arch=arm64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu noble stable" > /etc/apt/sources.list.d/docker.list
+  - apt-get update -y
+  - apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+  # --- Docker service ---
+  - systemctl enable docker
+  - systemctl start docker
+  - usermod -aG docker ubuntu
+
+  # --- n8n data directory ---
+  - mkdir -p /opt/n8n/data
+  - chown -R 1000:1000 /opt/n8n/data
+
+  # --- docker-compose.yml for n8n ---
+  - |
+    cat > /opt/n8n/docker-compose.yml << 'EOF'
+    services:
+      n8n:
+        image: docker.n8n.io/n8nio/n8n:latest
+        restart: unless-stopped
+        ports:
+          - "5678:5678"
+        environment:
+          - N8N_HOST=0.0.0.0
+          - N8N_PORT=5678
+          - N8N_PROTOCOL=http
+          - N8N_SECURE_COOKIE=false
+          - GENERIC_TIMEZONE=Asia/Tokyo
+          - TZ=Asia/Tokyo
+        volumes:
+          - /opt/n8n/data:/home/node/.n8n
+    EOF
+
+  # --- start n8n ---
+  - cd /opt/n8n && docker compose up -d
+
+final_message: |
+  ✅ n8n-dev setup complete.
+  n8n is running at http://0.0.0.0:5678
+  To access from Mac: multipass info n8n-dev (get IP) then open http://<VM-IP>:5678
