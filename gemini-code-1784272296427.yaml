@@ -1,0 +1,91 @@
+#cloud-config
+# n8n + PostgreSQL automation environment for Multipass (Ubuntu 24.04 Noble)
+# 
+# [適用済みの改善策]
+# 1. write_filesモジュールへの移行（catによるリダイレクトバグの完全排除）
+# 2. get.docker.com の採用（環境変数やアーキテクチャ自動判定のトラブルを解消）
+# 3. WEBHOOK_URLの完全自動解決（ホストIPを自動検出し、起動時に.envへ即時注入）
+# 4. systemdの廃止（Dockerの restart: unless-stopped に起動管理を一本化しシンプルに）
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - curl
+  - git
+
+write_files:
+  # --- .env テンプレート配置 ---
+  - path: /opt/n8n/.env
+    owner: root:root
+    permissions: '0644'
+    content: |
+      # 起動時にruncmdスクリプトによって自動的に実際のIPアドレスへ書き換わります
+      WEBHOOK_URL=http://CHANGE_ME:5678/
+
+  # --- docker-compose.yml 配置 ---
+  - path: /opt/n8n/docker-compose.yml
+    owner: root:root
+    permissions: '0644'
+    content: |
+      services:
+        postgres:
+          image: postgres:16
+          restart: unless-stopped
+          environment:
+            POSTGRES_USER: n8n
+            POSTGRES_PASSWORD: n8n
+            POSTGRES_DB: n8n
+          volumes:
+            - /opt/postgres/data:/var/lib/postgresql/data
+
+        n8n:
+          image: docker.n8n.io/n8nio/n8n:latest
+          restart: unless-stopped
+          ports:
+            - "5678:5678"
+          env_file:
+            - .env
+          environment:
+            - N8N_HOST=0.0.0.0
+            - N8N_PORT=5678
+            - N8N_PROTOCOL=http
+            - N8N_SECURE_COOKIE=false
+            - GENERIC_TIMEZONE=Asia/Tokyo
+            - TZ=Asia/Tokyo
+            - DB_TYPE=postgresdb
+            - DB_POSTGRESDB_HOST=postgres
+            - DB_POSTGRESDB_PORT=5432
+            - DB_POSTGRESDB_DATABASE=n8n
+            - DB_POSTGRESDB_USER=n8n
+            - DB_POSTGRESDB_PASSWORD=n8n
+          volumes:
+            - /opt/n8n/data:/home/node/.n8n
+          depends_on:
+            - postgres
+
+runcmd:
+  # 1. 永続データ用ディレクトリの作成
+  - mkdir -p /opt/n8n/data
+  - mkdir -p /opt/postgres/data
+
+  # 2. Dockerのインストールとユーザー権限付与
+  - curl -fsSL https://get.docker.com -o get-docker.sh
+  - sh get-docker.sh
+  - usermod -aG docker ubuntu
+
+  # 3. 自身のプライベートIPアドレスを取得し、.env の WEBHOOK_URL を自動書き換え
+  - VM_IP=$(hostname -I | awk '{print $1}')
+  - sed -i "s/CHANGE_ME/${VM_IP}/g" /opt/n8n/.env
+
+  # 4. コンテナの初回起動（restart: unless-stopped により次回OS起動時も自動追従）
+  - cd /opt/n8n && docker compose up -d
+
+final_message: |
+  ✅ n8n-dev setup complete and fully automated!
+  
+  【アクセス情報】
+  1. 以下のコマンドで、このVMのIPアドレスを確認してください:
+       multipass info n8n-dev
+  2. ブラウザでそのままアクセス可能です（WEBHOOK_URLも設定済みです）:
+       http://<確認したVMのIP>:5678
